@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "version_name": "1.279.0",
+  "version_code": 950,
+  "original_package": "com.github.android",
+  "clone_package": "com.github.android.chinese",
+  "official_signer_sha256": "df08c9f2d809189d9d506497c15745a7395a41536efb433e3aee1aedbe11b261",
+  "application": "com.github.android.GitHubApplication",
+  "main_activity": "com.github.android.main.MainActivity",
+  "hooks": [
+    {"id":"application", "class":"Lcom/github/android/GitHubApplication;", "extends":"Landroid/app/Application;", "method":"onCreate()V", "anchor":"invoke-super {v0}, Lvcl;->onCreate()V", "requires":["move-object/from16 v0, p0"], "insert":"invoke-static {v0}, Lcn/local/githubcn/Hooks;->initialize(Landroid/app/Application;)V"},
+    {"id":"main", "class":"Lcom/github/android/main/MainActivity;", "method":"onResume()V", "anchor":"invoke-super {p0}, Lcom/github/android/activities/g;->onResume()V", "insert":"invoke-static {p0}, Lcn/local/githubcn/Hooks;->attach(Landroid/app/Activity;)V"},
+    {"id":"web_client", "class":"Lcom/github/android/webview/viewholders/e;", "extends":"Landroid/webkit/WebViewClient;", "method":"onPageFinished(Landroid/webkit/WebView;Ljava/lang/String;)V", "anchor":"invoke-super {p0, p1, p2}, Landroid/webkit/WebViewClient;->onPageFinished(Landroid/webkit/WebView;Ljava/lang/String;)V", "insert":"invoke-static {p1}, Lcn/local/githubcn/Immersive;->attach(Landroid/webkit/WebView;)V"},
+    {"id":"web_constructor", "class":"Lcom/github/android/webview/viewholders/f;", "extends":"Landroid/webkit/WebView;", "method":"<init>(Landroid/content/Context;Lff0;Lcom/github/android/a;Lu8c;Lbik;)V", "anchor_regex":"invoke-virtual/range \\{v\\d+ \\.\\. v\\d+\\}, Landroid/webkit/WebView;->loadDataWithBaseURL\\(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;\\)V", "insert":"invoke-static {p0}, Lcn/local/githubcn/Immersive;->attach(Landroid/webkit/WebView;)V"},
+    {"id":"legacy_web_constructor", "class":"Lcom/github/android/webview/viewholders/LegacyGitHubWebView;", "extends":"Landroid/webkit/WebView;", "method":"<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V", "anchor_regex":"invoke-virtual/range \\{v\\d+ \\.\\. v\\d+\\}, Landroid/webkit/WebView;->loadDataWithBaseURL\\(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;\\)V", "insert":"invoke-static {p0}, Lcn/local/githubcn/Immersive;->attach(Landroid/webkit/WebView;)V"},
+    {"id":"compose_description", "class":"Lxrz;", "method":"a(IILekk;Lb1r;Ljava/lang/String;)V", "anchor":"invoke-virtual {v0, v2}, Lekk;->e0(I)Lekk;", "requires":["move-object/from16 v0, p2", "move-object/from16 v1, p4", "const v2, 0x19c39b2c"], "insert":"invoke-static {v1, v0}, Lcn/local/githubcn/NativeText;->render(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/String;\n\n    move-result-object v1"},
+    {"id":"search_entry", "class":"Lcom/github/android/home/search/GlobalSearchFragment;", "method":"d5(Landroid/view/View;Landroid/os/Bundle;)V", "anchor":".locals 12", "insert":"invoke-static/range {p1 .. p1}, Lcn/local/githubcn/Hooks;->searchEntry(Landroid/view/View;)V"}
+  ],
+  "runtime_members": {
+    "Lekk;": ["(?m)^\\.method public final z\\(\\)Lh6x;$", "(?m)^\\.method public final j\\(Lqgv;\\)Ljava/lang/Object;$"],
+    "Lg52;": ["(?m)^\\.field public static final b:Lu060;$"],
+    "Lh6x;": ["(?m)^\\.field public b:I$", "(?m)^\\.method public final b\\(Ljava/lang/Object;\\)Lk6m;$"],
+    "Lqgv;": []
+  },
+  "identity_literals": [
+    {"class":"Lma0;", "old":"\"com.github.android\"", "new":"\"com.github.android.chinese\"", "count":1},
+    {"class":"Lkpr;", "old":"\"com.github.android\"", "new":"\"com.github.android.chinese\"", "count":1},
+    {"class":"Llu40;", "old":"\"com.github.android\"", "new":"\"com.github.android.chinese\"", "count":1},
+    {"class":"Lni40;", "old":"\"com.github.android\"", "new":"\"com.github.android.chinese\"", "count":1},
+    {"class":"Lmun;", "old":"\"com.github.android\"", "new":"\"com.github.android.chinese\"", "count":2},
+    {"class":"Ljbd;", "old":"\"com.github.android\"", "new":"\"com.github.android.chinese\"", "count":1},
+    {"class":"Lyr;", "old":"\"com.github.android.ahp-attachments\"", "new":"\"com.github.android.chinese.ahp-attachments\"", "count":1}
+  ]
+}
