@@ -1,0 +1,18 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <permission android:name="cn.local.repochinese.TRANSLATE" android:protectionLevel="signature" />
+    <queries><package android:name="com.github.android" /></queries>
+    <application android:theme="@android:style/Theme.Material.Light.NoActionBar" android:label="仓库中文助手" android:icon="@drawable/ic_repo" android:allowBackup="false" android:usesCleartextTraffic="false">
+        <provider android:name=".TranslationProvider" android:authorities="cn.local.repochinese.translation" android:exported="true" android:permission="cn.local.repochinese.TRANSLATE" />
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+            <intent-filter><action android:name="android.intent.action.SEND" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="text/plain" /></intent-filter>
+            <intent-filter><action android:name="android.intent.action.PROCESS_TEXT" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="text/plain" /></intent-filter>
+        </activity>
+        <service android:name=".ReaderService" android:label="仓库中文助手" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:exported="true">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/reader_service" />
+        </service>
+    </application>
+</manifest>
