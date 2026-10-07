@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="cn.local.githubcn.check" android:versionCode="1" android:versionName="1.0">
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="36" />
+    <application android:label="GitHub 中文增强临时验证" android:debuggable="true" android:allowBackup="false" android:hasCode="true" />
+    <instrumentation android:name="cn.local.githubcn.check.ImmersiveCheck"
+        android:targetPackage="com.github.android.chinese" android:functionalTest="true" />
+</manifest>
