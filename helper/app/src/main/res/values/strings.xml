@@ -1,0 +1,3 @@
+<resources>
+    <string name="service_description">只在 GitHub 前台显示翻译按钮；点击后读取当前页面可见的英文正文，在手机本地译为中文。跳过密码与输入框，不执行点击、不修改仓库、不读取其他应用正文。首次使用需联网下载语言模型。</string>
+</resources>
