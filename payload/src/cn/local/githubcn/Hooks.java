@@ -25,6 +25,8 @@ public final class Hooks {
         settings = app.getSharedPreferences("github_cn", Context.MODE_PRIVATE);
         Immersive.setEnabled(settings.getBoolean("enabled", true));
         Immersive.setTarget(settings.getString("target", "zh"));
+        Immersive.setBilingual(settings.getBoolean("bilingual", false));
+        Immersive.warm(app);
         app.registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
             public void onActivityResumed(Activity a) { attach(a); }
             public void onActivityPaused(Activity a) { pause(a); }
@@ -154,7 +156,7 @@ public final class Hooks {
     }
 
     private static void showMenu(Activity a) {
-        String[] entries = {"仓库增强搜索", Immersive.enabled() ? "关闭翻译，恢复原文" : "开启全文翻译", "目标语言：" + language(), "翻译说明", "恢复译 / 搜按钮", "更新与开源项目", "原版搜索接入增强搜索：" + (redirectSearch() ? "开" : "关")};
+        String[] entries = {"仓库增强搜索", Immersive.enabled() ? "关闭翻译，恢复原文" : "开启全文翻译", "目标语言：" + language(), "翻译说明", "恢复译 / 搜按钮", "更新与开源项目", "原版搜索接入增强搜索：" + (redirectSearch() ? "开" : "关"), "双语显示：" + (Immersive.bilingual() ? "开" : "关")};
         new AlertDialog.Builder(a).setTitle("GitHub 中文增强").setItems(entries, (d, which) -> {
             if (which == 0) a.startActivity(new Intent(a, SearchActivity.class));
             if (which == 1) {
@@ -171,7 +173,7 @@ public final class Hooks {
                     }).show();
             }
             if (which == 3) new AlertDialog.Builder(a).setTitle("全文翻译").setMessage(
-                "自动替换 README 和讨论正文，保留代码、链接与操作控件；关闭后恢复原文。\n\n仓库中文助手提供本机翻译模型，首次使用其他语言需要 Wi-Fi 下载模型。")
+                "自动替换 README 和讨论正文，保留代码、链接与操作控件；关闭后恢复原文。双语显示可同时保留原文与译文。\n\n翻译引擎已内置，无需仓库中文助手或无障碍权限。首次使用语言需 Wi-Fi 下载本应用自己的离线模型。")
                 .setPositiveButton("知道了", null).show();
             if (which == 4) {
                 FloatingButton button = FloatingButton.attach(a, () -> showMenu(a));
@@ -181,6 +183,10 @@ public final class Hooks {
             if (which == 6) {
                 settings.edit().putBoolean("search_redirect", !redirectSearch()).apply();
                 Toast.makeText(a, redirectSearch() ? "已开启原版搜索接入增强搜索" : "已关闭，原版搜索保持正常", Toast.LENGTH_SHORT).show();
+            }
+            if (which == 7) {
+                Immersive.setBilingual(!Immersive.bilingual()); save();
+                Toast.makeText(a, Immersive.bilingual() ? "已开启原文与译文双语显示" : "已关闭双语，仅显示译文", Toast.LENGTH_SHORT).show();
             }
         }).show();
     }
@@ -207,6 +213,7 @@ public final class Hooks {
         return LanguageOptions.name(Immersive.target());
     }
     private static void save() {
-        if (settings != null) settings.edit().putBoolean("enabled", Immersive.enabled()).putString("target", Immersive.target()).apply();
+        if (settings != null) settings.edit().putBoolean("enabled", Immersive.enabled())
+            .putString("target", Immersive.target()).putBoolean("bilingual", Immersive.bilingual()).apply();
     }
 }

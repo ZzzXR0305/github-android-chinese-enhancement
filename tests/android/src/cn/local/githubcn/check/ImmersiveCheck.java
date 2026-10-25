@@ -4,8 +4,8 @@ import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Context;
 import android.content.pm.PackageManager;
-import android.net.Uri;
 import android.os.Bundle;
+import android.os.Looper;
 import android.os.Process;
 import android.os.SystemClock;
 import android.webkit.WebView;
@@ -13,6 +13,7 @@ import android.widget.TextView;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
@@ -32,6 +33,7 @@ public final class ImmersiveCheck extends Instrumentation {
     private Class<?> immersive;
     private long deadline;
     private boolean originalEnabled;
+    private boolean originalBilingual;
     private String originalTarget;
     private Bundle arguments;
 
@@ -49,11 +51,15 @@ public final class ImmersiveCheck extends Instrumentation {
             evidence.putInt("process_uid", Process.myUid());
             evidence.putInt("process_pid", Process.myPid());
             evidence.putInt("target_uid", target.getApplicationInfo().uid);
-            boolean permission = target.checkSelfPermission("cn.local.repochinese.TRANSLATE") == PackageManager.PERMISSION_GRANTED;
-            evidence.putBoolean("signature_permission", permission);
             require("com.github.android.chinese".equals(target.getPackageName()), "Wrong instrumentation target package");
             require(Process.myUid() == target.getApplicationInfo().uid, "Runner is not executing under the clone UID");
-            require(permission, "Clone lacks the translation provider signature permission");
+            String[] permissions = target.getPackageManager().getPackageInfo(target.getPackageName(), PackageManager.GET_PERMISSIONS).requestedPermissions;
+            if (permissions != null) for (String permission : permissions)
+                require(!"cn.local.repochinese.TRANSLATE".equals(permission), "Clone still requests the external helper permission");
+            evidence.putBoolean("no_helper_permission", true);
+            Class<?> localTranslation = Class.forName("cn.local.githubcn.LocalTranslation", true, target.getClassLoader());
+            Method localCall = localTranslation.getMethod("call", Context.class, String.class, Bundle.class);
+            evidence.putBoolean("embedded_engine_loaded", true);
             if (arguments != null && "french".equals(arguments.getString("only"))) {
                 Bundle french = BilingualCheck.runFrench(this, target, deadline);
                 evidence.putAll(french);
@@ -64,9 +70,11 @@ public final class ImmersiveCheck extends Instrumentation {
             immersive = Class.forName("cn.local.githubcn.Immersive", true, target.getClassLoader());
             originalEnabled = (Boolean) immersive.getMethod("enabled").invoke(null);
             originalTarget = (String) immersive.getMethod("target").invoke(null);
+            originalBilingual = (Boolean) immersive.getMethod("bilingual").invoke(null);
             main(() -> {
                 invoke("setTarget", String.class, "zh");
                 invoke("setEnabled", boolean.class, true);
+                invoke("setBilingual", boolean.class, false);
                 web = new WebView(target);
                 web.getSettings().setJavaScriptEnabled(true);
                 web.loadDataWithBaseURL("https://appassets.androidplatform.net/android_asset/webview/",
@@ -96,23 +104,60 @@ public final class ImmersiveCheck extends Instrumentation {
             evidence.putBoolean("originals_restored", true);
             report("Disabling translation restored both original paragraphs");
 
-            // A real resolver call from target Context confirms the provider accepted this clone caller.
-            FutureTask<Bundle> provider = new FutureTask<>(() -> {
+            // A real embedded call verifies the target class and UID, without a helper resolver.
+            FutureTask<Bundle> embedded = new FutureTask<>(() -> {
+                require(Process.myUid() == target.getApplicationInfo().uid, "Embedded call is outside the clone UID");
+                require(Looper.myLooper() != Looper.getMainLooper(), "Embedded translation ran on the main thread");
                 Bundle extras = new Bundle();
                 extras.putString("text", ORIGINAL);
                 extras.putString("target", "zh");
-                return target.getContentResolver().call(Uri.parse("content://cn.local.repochinese.translation"), "translate", null, extras);
+                return (Bundle) localCall.invoke(null, target, "translate", extras);
             });
-            Thread caller = new Thread(provider, "githubcn-check-provider");
+            Thread caller = new Thread(embedded, "githubcn-check-embedded");
             caller.setDaemon(true);
             caller.start();
-            Bundle reply = provider.get(remaining(), TimeUnit.MILLISECONDS);
-            require(reply != null, "Provider returned no bundle");
-            evidence.putString("provider_error", reply.getString("error"));
-            evidence.putString("provider_text", reply.getString("text"));
-            require(reply.getString("error") == null && chinese(reply.getString("text")), "Provider rejected clone caller or returned no Chinese: " + reply);
-            evidence.putBoolean("provider_clone_call", true);
-            report("Signed provider accepted clone Context caller and returned Chinese");
+            Bundle reply = embedded.get(remaining(), TimeUnit.MILLISECONDS);
+            require(reply != null, "Embedded engine returned no bundle");
+            evidence.putString("embedded_error", reply.getString("error"));
+            evidence.putString("embedded_text", reply.getString("text"));
+            require(reply.getString("error") == null && chinese(reply.getString("text")), "Embedded engine returned an error or no Chinese: " + reply);
+            evidence.putBoolean("embedded_clone_call", true);
+            report("Embedded engine ran under clone UID in a background thread and returned Chinese");
+
+            // Repeat an already translated synthetic sentence: no new language/model request is needed.
+            Field cacheField = localTranslation.getDeclaredField("TRANSLATIONS");
+            cacheField.setAccessible(true);
+            Object cache = cacheField.get(null);
+            Class<?> cacheType = Class.forName("android.util.LruCache");
+            Method hitCount = cacheType.getMethod("hitCount");
+            int hitsBefore = ((Number) hitCount.invoke(cache)).intValue();
+            FutureTask<Bundle> repeats = new FutureTask<>(() -> {
+                require(Looper.myLooper() != Looper.getMainLooper(), "Repeat cache checks ran on the main thread");
+                Bundle answer = null;
+                for (int i = 0; i < 3; i++) {
+                    Bundle extras = new Bundle();
+                    extras.putString("text", ORIGINAL); extras.putString("target", "zh");
+                    if (i > 0) extras.putString("source", "en");
+                    answer = (Bundle) localCall.invoke(null, target, "translate", extras);
+                    require(answer != null && answer.getString("error") == null &&
+                        reply.getString("text").equals(answer.getString("text")), "Repeat cache reply differs from the successful result");
+                }
+                return answer;
+            });
+            Thread cacheCaller = new Thread(repeats, "githubcn-check-repeat-cache");
+            cacheCaller.setDaemon(true); cacheCaller.start();
+            repeats.get(remaining(), TimeUnit.MILLISECONDS);
+            int hitsAfter = ((Number) hitCount.invoke(cache)).intValue();
+            int cacheSize = ((Number) cacheType.getMethod("size").invoke(cache)).intValue();
+            int cacheLimit = ((Number) cacheType.getMethod("maxSize").invoke(cache)).intValue();
+            require(hitsAfter >= hitsBefore + 3, "Repeated successful translations did not hit the memory cache");
+            require(cacheLimit == 512 * 1024 && cacheSize >= 0 && cacheSize <= cacheLimit, "Translation cache exceeds its character budget");
+            evidence.putInt("translation_cache_hit_count_delta", hitsAfter - hitsBefore);
+            evidence.putInt("translation_cache_size_characters", cacheSize);
+            evidence.putInt("translation_cache_limit_characters", cacheLimit);
+            evidence.putBoolean("translation_cache_repeated_hits", true);
+            evidence.putBoolean("translation_cache_char_bound", true);
+            report("Repeated synthetic translations hit the in-memory cache; its size stays within 512K characters");
 
             Class<?> nativeText = Class.forName("cn.local.githubcn.NativeText", true, target.getClassLoader());
             Method attachText = nativeText.getMethod("attach", TextView.class);
@@ -128,6 +173,32 @@ public final class ImmersiveCheck extends Instrumentation {
             evidence.putString("native_translated", nativeTranslated);
             evidence.putBoolean("native_text_translated", true);
             report("Native TextView description replaced by Chinese: " + nativeTranslated);
+            main(() -> {
+                for (int i = 0; i < 10; i++) {
+                    nativeView.setText(NATIVE);
+                    require(nativeTranslated.equals(nativeView.getText().toString()),
+                        "Native rebind " + i + " briefly restored the original instead of synchronously reusing the translation");
+                }
+            });
+            evidence.putBoolean("native_rebind_stable", true);
+            evidence.putInt("native_rebind_count", 10);
+            report("Ten native source rebinds synchronously kept Chinese without another attach call");
+            main(() -> invoke("setBilingual", boolean.class, true));
+            String nativeBilingual = waitForNative("native bilingual display", text -> (NATIVE + '\n' + nativeTranslated).equals(text));
+            require(count(nativeBilingual, NATIVE) == 1 && count(nativeBilingual, nativeTranslated) == 1,
+                "Native bilingual display duplicated a source or translation");
+            evidence.putString("native_bilingual_text", nativeBilingual);
+            evidence.putBoolean("native_bilingual_source_once", true);
+            evidence.putBoolean("native_bilingual_translation_once", true);
+            main(() -> invoke("setBilingual", boolean.class, false));
+            waitForNative("native translation-only after bilingual mode", nativeTranslated::equals);
+            evidence.putBoolean("native_bilingual_switch", true);
+            main(() -> invoke("setEnabled", boolean.class, false));
+            waitForNative("native original after disabling", NATIVE::equals);
+            evidence.putBoolean("native_disabled_original", true);
+            main(() -> invoke("setEnabled", boolean.class, true));
+            waitForNative("native Chinese after re-enabling", nativeTranslated::equals);
+            evidence.putBoolean("native_reenable_chinese", true);
             main(() -> invoke("setTarget", String.class, "en"));
             evidence.putString("native_restored", waitForNative("native TextView English restored", NATIVE::equals));
             evidence.putBoolean("native_en_restored", true);
@@ -190,6 +261,12 @@ public final class ImmersiveCheck extends Instrumentation {
                     if (immersive != null && originalTarget != null) {
                         invoke("setTarget", String.class, originalTarget);
                         invoke("setEnabled", boolean.class, originalEnabled);
+                        invoke("setBilingual", boolean.class, originalBilingual);
+                        try {
+                            require(originalBilingual == (Boolean) immersive.getMethod("bilingual").invoke(null),
+                                "Original bilingual setting was not restored");
+                            evidence.putBoolean("cleanup_bilingual_restored", true);
+                        } catch (Exception error) { throw new IllegalStateException("Bilingual cleanup failed", error); }
                     }
                     if (web != null) { web.stopLoading(); web.destroy(); web = null; }
                     nativeView = null;
@@ -197,7 +274,7 @@ public final class ImmersiveCheck extends Instrumentation {
             } catch (Throwable cleanup) { evidence.putString("cleanup_error", cleanup.toString()); }
             evidence.putBoolean("passed", passed);
             evidence.putLong("elapsed_ms", SystemClock.elapsedRealtime() - (deadline - 180000));
-            String scope = "french-only".equals(evidence.getString("check_mode")) ? "French model check" : "target-process immersive/provider/native/search/bilingual/Compose/floating/French checks";
+            String scope = "french-only".equals(evidence.getString("check_mode")) ? "French model check" : "target-process immersive/embedded/native/search/bilingual/Compose/floating/French checks";
             evidence.putString("stream", (passed ? "PASS" : "FAIL") + ": " + scope + (passed ? "" : " - " + evidence.getString("failure_cause", "unknown failure")) + "\n");
             finish(passed ? Activity.RESULT_OK : Activity.RESULT_CANCELED, evidence);
         }
@@ -254,6 +331,11 @@ public final class ImmersiveCheck extends Instrumentation {
     }
 
     private long remaining() { return Math.max(0, deadline - SystemClock.elapsedRealtime()); }
+    private static int count(String text, String value) {
+        int total = 0, offset = 0;
+        while ((offset = text.indexOf(value, offset)) >= 0) { total++; offset += value.length(); }
+        return total;
+    }
     private static boolean chinese(String text) { return text != null && text.matches("(?s).*[\\u3400-\\u9fff].*"); }
     private static void require(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
 }

@@ -22,7 +22,6 @@ from patch import ANDROID, ValidationError, apply_plan, make_plan
 from resources import preserve_resources
 
 REPOSITORY = Path(__file__).resolve().parents[2]
-HELPER_PACKAGE = "cn.local.repochinese"
 
 
 def run(command, quiet=False):
@@ -139,10 +138,10 @@ def check_resources(tools, original, rebuilt):
         raise ValueError("Resource table references disappeared during APK rebuild")
 
 
-def compile_payload(tools, work, profile, patch_version, repository_name):
+def compile_payload(tools, work, profile, patch_version, repository_name, engine):
     source = REPOSITORY / "payload/src"
     files = [item for item in source.rglob("*.java") if item.name not in ("BuildInfo.java", "SearchQueryCheck.java")]
-    required = {"Hooks.java", "Immersive.java", "NativeText.java", "SearchActivity.java", "SearchQuery.java", "UpdateActivity.java"}
+    required = {"Hooks.java", "Immersive.java", "NativeText.java", "SearchActivity.java", "SearchQuery.java", "UpdateActivity.java", "LocalTranslation.java"}
     if not required.issubset({item.name for item in files}):
         raise ValueError("Missing own payload sources: " + str(sorted(required - {item.name for item in files})))
     generated = work / "generated/BuildInfo.java"
@@ -152,7 +151,8 @@ def compile_payload(tools, work, profile, patch_version, repository_name):
         "public static final long OFFICIAL_CODE = " + str(profile["version_code"]) + ";",
         "public static final String PATCH_VERSION = " + json.dumps(patch_version) + ";",
         "public static final String RELEASE_TAG = " + json.dumps("v" + profile["version_name"] + "-" + patch_version) + ";",
-        "public static final String REPOSITORY = " + json.dumps(repository_name) + ";", "private BuildInfo() {}"] ) + "\n}\n", encoding="utf-8")
+        "public static final String REPOSITORY = " + json.dumps(repository_name) + ";",
+        "public static final String ENGINE_SHA256 = " + json.dumps(hashlib.sha256(engine.read_bytes()).hexdigest()) + ";", "private BuildInfo() {}"] ) + "\n}\n", encoding="utf-8")
     classes, dex = work / "payload-classes", work / "payload-dex"
     classes.mkdir(); dex.mkdir()
     run([tools["javac"], "-J-Dfile.encoding=UTF-8", "--release", "8", "-encoding", "UTF-8", "-cp", tools["android_jar"], "-d", classes] + files + [generated])
@@ -162,7 +162,7 @@ def compile_payload(tools, work, profile, patch_version, repository_name):
     return dex / "classes.dex"
 
 
-def inject_payload(base, dex, asset):
+def inject_payload(base, dex, asset, engine):
     temporary = base.with_suffix(".payload.apk")
     with zipfile.ZipFile(base) as source, zipfile.ZipFile(temporary, "w") as target:
         names = source.namelist()
@@ -173,6 +173,12 @@ def inject_payload(base, dex, asset):
             target.writestr(entry, source.read(entry))
         target.write(dex, "classes" + str(max(indices) + 1) + ".dex", compress_type=zipfile.ZIP_STORED)
         target.write(asset, "assets/github-immersive.js", compress_type=zipfile.ZIP_DEFLATED)
+        target.write(engine, "assets/githubcn-engine.apk", compress_type=zipfile.ZIP_DEFLATED)
+        with zipfile.ZipFile(engine) as library:
+            model = "assets/tflite_langid.tflite.jpg"
+            if model in names:
+                raise ValueError("Embedded language model would overwrite an official asset")
+            target.writestr(model, library.read(model), compress_type=zipfile.ZIP_STORED)
     temporary.replace(base)
 
 
@@ -197,19 +203,12 @@ def installed_certificate(tools, package, work):
     return certificate(tools, output), apk_metadata(tools, output)
 
 
-def install(tools, signed, helper, fingerprint, profile, work):
+def install(tools, signed, fingerprint, profile, work):
     clone_cert, clone_meta = installed_certificate(tools, profile["clone_package"], work)
     if clone_cert is not None and clone_cert != fingerprint:
         raise ValueError("Installed clone uses a different signing key. Keep its original external key; no uninstall or data clearing was performed")
     if clone_meta and int(clone_meta["versionCode"]) > profile["version_code"]:
         raise ValueError("Refusing to downgrade the clone versionCode")
-    helper_cert, _ = installed_certificate(tools, HELPER_PACKAGE, work)
-    if helper_cert is not None and helper_cert != fingerprint:
-        raise ValueError("Installed helper signing certificate differs from the clone key; use the original key for both")
-    if helper is None and helper_cert != fingerprint:
-        raise ValueError("The same-key helper is not installed. Build the self-owned helper source and supply --helper-apk")
-    if helper is not None:
-        run(tools["adb"] + ["install", "-r", helper])
     run(tools["adb"] + ["install-multiple", "-r"] + signed)
     print("Clone upgraded with -r; no account files, tokens, uninstall, or data-clear operation was used")
 
@@ -229,8 +228,8 @@ def main():
     parser.add_argument("--key-alias", required=True)
     parser.add_argument("--store-pass-env", default="GITHUBCN_KEYSTORE_PASSWORD")
     parser.add_argument("--key-pass-env", default="GITHUBCN_KEY_PASSWORD")
-    parser.add_argument("--helper-apk", type=Path, help="Self-owned helper APK, re-signed with the same external key")
-    parser.add_argument("--patch-version", default=os.environ.get("PATCH_VERSION", "cn2"))
+    parser.add_argument("--embedded-engine-apk", required=True, type=Path, help="Locally built embedded-engine container; never installed separately")
+    parser.add_argument("--patch-version", default=os.environ.get("PATCH_VERSION", "cn4"))
     parser.add_argument("--repository", default="ZzzXR0305/github-android-chinese-enhancement")
     parser.add_argument("--install", action="store_true", help="Opt-in same-package, same-key -r upgrade after every validation passes")
     args = parser.parse_args()
@@ -279,8 +278,11 @@ def main():
         asset = REPOSITORY / "payload/assets/github-immersive.js"
         if not asset.is_file():
             raise ValueError("Self-owned immersive payload asset is missing")
-        if args.helper_apk and apk_metadata(tools, args.helper_apk).get("name") != HELPER_PACKAGE:
-            raise ValueError("--helper-apk must be the self-owned " + HELPER_PACKAGE + " APK")
+        engine = args.embedded_engine_apk.expanduser().resolve()
+        with zipfile.ZipFile(engine) as library:
+            required_engine = {"classes.dex", "assets/tflite_langid.tflite.jpg", "lib/arm64-v8a/libtranslate_jni.so", "lib/arm64-v8a/liblanguage_id_l2c_jni.so"}
+            if not required_engine.issubset(library.namelist()):
+                raise ValueError("Incomplete embedded translation engine")
         decoded = work / "decoded"; decoded.mkdir()
         decode(tools, base, decoded / "base")
         plan = make_plan(decoded / "base", profile, args.patch_version)
@@ -299,7 +301,7 @@ def main():
             raise ValueError("Incomplete official split set; missing " + str(sorted(required - provided)))
         # All hook, identity, version, signer, source and split checks finish before a decoded tree is patched.
         print("Full preflight passed; compiling self-owned payload", flush=True)
-        dex = compile_payload(tools, work, profile, args.patch_version, args.repository)
+        dex = compile_payload(tools, work, profile, args.patch_version, args.repository, engine)
         (work / "preflight.json").write_text(json.dumps(plan["report"], ensure_ascii=False, indent=2), encoding="utf-8")
         patched = work / "patched"; patched.mkdir()
         apply_plan(plan, patched / "base")
@@ -308,7 +310,7 @@ def main():
         run([tools["java"], "-Xmx3g", "-Dfile.encoding=UTF-8", "-jar", tools["apktool"], "b", patched / "base", "-o", unsigned / "base.apk"])
         preserve_resources(base, unsigned / "base.apk", profile["original_package"], profile["clone_package"])
         check_resources(tools, base, unsigned / "base.apk")
-        inject_payload(unsigned / "base.apk", dex, asset)
+        inject_payload(unsigned / "base.apk", dex, asset, engine)
         unsigned_apks = [unsigned / "base.apk"]
         for index, (original, directory, document) in enumerate(split_documents):
             target = patched / ("split-" + str(index)); shutil.copytree(directory, target)
@@ -333,16 +335,13 @@ def main():
         for apk in unsigned_apks:
             output = output_dir / apk.name
             fingerprints.add(sign(tools, apk, output, args)); signed.append(output)
-        helper = None
-        if args.helper_apk:
-            helper = output_dir / "repo-chinese-helper.apk"
-            fingerprints.add(sign(tools, args.helper_apk, helper, args))
         if len(fingerprints) != 1:
-            raise ValueError("Clone/helper signing certificate mismatch")
+            raise ValueError("Clone split signing certificate mismatch")
         fingerprint = fingerprints.pop()
         report = {"supported_official_version": profile["version_name"], "clone_version": plan["report"]["clone_version"], "version_code": profile["version_code"], "clone_package": profile["clone_package"], "certificate_sha256": fingerprint, "original_resources_preserved": True, "payload_dex_sha256": hashlib.sha256(dex.read_bytes()).hexdigest(), "immersive_asset_sha256": hashlib.sha256(asset.read_bytes()).hexdigest(), "apks": [{"name": apk.name, "sha256": hashlib.sha256(apk.read_bytes()).hexdigest()} for apk in signed], "installed": False}
+        report.update({"embedded_translation": True, "helper_dependency": False, "engine_sha256": hashlib.sha256(engine.read_bytes()).hexdigest()})
         if args.install:
-            install(tools, signed, helper, fingerprint, profile, work)
+            install(tools, signed, fingerprint, profile, work)
             report["installed"] = True
         (work / "build-result.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps(report, ensure_ascii=False, indent=2))

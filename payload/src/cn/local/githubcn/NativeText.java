@@ -1,13 +1,14 @@
 package cn.local.githubcn;
 
-import android.content.ContentResolver;
 import android.content.Context;
-import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Html;
+import android.text.Editable;
+import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.widget.EditText;
 import android.widget.TextView;
 import java.io.IOException;
@@ -26,7 +27,7 @@ import java.util.regex.Pattern;
 /** Only called from the original repository short-description Compose renderer. */
 public final class NativeText {
     private static Handler main;
-    private static ContentResolver resolver;
+    private static Context appContext;
     private static final WeakHashMap<Object, Boolean> SCOPES = new WeakHashMap<>();
     private static final WeakHashMap<TextView, TextRecord> VIEWS = new WeakHashMap<>();
     private static final HashSet<String> PENDING = new HashSet<>();
@@ -52,19 +53,19 @@ public final class NativeText {
                 flags.setInt(scope, flags.getInt(scope) | 1);
                 SCOPES.put(scope, Boolean.TRUE);
             }
-            if (resolver == null) {
+            if (appContext == null) {
                 ClassLoader loader = composer.getClass().getClassLoader();
                 Object contextKey = Class.forName("g52", true, loader).getField("b").get(null);
                 Method readLocal = composer.getClass().getMethod("j", Class.forName("qgv", true, loader));
                 Context context = (Context) readLocal.invoke(composer, contextKey);
-                resolver = context.getApplicationContext().getContentResolver();
+                appContext = context.getApplicationContext();
             }
         } catch (Exception ignored) { return html; }
         if (!Immersive.enabled() || Immersive.target().equals("en")) return html;
         final String language = Immersive.target(), key = language + '\u0000' + html;
         synchronized (NativeText.class) {
             String cached = CACHE.get(key);
-            if (cached != null) return cached;
+            if (cached != null) return displayHtml(html, cached, Immersive.bilingual());
             Long retry = RETRY.get(key);
             if (PENDING.contains(key) || (retry != null && retry > System.currentTimeMillis())) return html;
             PENDING.add(key);
@@ -108,31 +109,37 @@ public final class NativeText {
     public static void attach(final TextView view) {
         if (view == null || view instanceof EditText) return;
         if (Looper.myLooper() != Looper.getMainLooper()) { main().post(() -> attach(view)); return; }
-        if (resolver == null) resolver = view.getContext().getApplicationContext().getContentResolver();
+        if (appContext == null) appContext = view.getContext().getApplicationContext();
         TextRecord record = VIEWS.get(view);
         if (record == null) {
             record = new TextRecord(view); VIEWS.put(view, record);
+            view.addTextChangedListener(record);
         }
         final TextRecord r = record;
+        if (r.writing) return;
         String current = view.getText().toString();
-        if (!current.equals(r.original.toString()) && !current.equals(r.translated)) {
-            r.original = view.getText(); r.translated = null; r.pending = false;
+        if (!current.equals(r.original.toString()) && !current.equals(r.lastDisplay)) {
+            r.original = TextUtils.stringOrSpannedString(view.getText());
+            r.translated = null; r.lastDisplay = null; r.pending = false;
             r.retryAt = 0; r.generation++;
         }
         String language = Immersive.target();
         boolean on = Immersive.enabled() && !language.equals("en");
         if (!language.equals(r.language) || on != r.enabled) {
-            if (r.translated != null && current.equals(r.translated)) view.setText(r.original);
             r.translated = null; r.pending = false; r.retryAt = 0; r.generation++;
             r.language = language; r.enabled = on;
         }
         final String source = r.original.toString();
-        if (!on || r.translated != null || r.pending || r.retryAt > System.currentTimeMillis() || !english(source.trim())) return;
+        if (!on) { show(r, view, r.original); return; }
+        if (r.translated != null) { showTranslation(r, view); return; }
+        // A mode/language change must not promote our previous display into a new source.
+        show(r, view, r.original);
+        if (r.pending || r.retryAt > System.currentTimeMillis() || !english(source.trim())) return;
         final String key = language + "\u0000text\u0000" + source;
         final long generation = r.generation;
         synchronized (NativeText.class) {
             String cached = CACHE.get(key);
-            if (cached != null) { r.translated = cached; view.setText(cached); return; }
+            if (cached != null) { r.translated = cached; showTranslation(r, view); return; }
         }
         r.pending = true;
         try {
@@ -148,9 +155,10 @@ public final class NativeText {
                     if (target == null || r.generation != generation) return;
                     r.pending = false;
                     if (!Immersive.enabled() || !Immersive.target().equals(language)) { attach(target); return; }
-                    if (!target.getText().toString().equals(source)) { attach(target); return; }
+                    String currentText = target.getText().toString();
+                    if (!currentText.equals(source) && !currentText.equals(r.lastDisplay)) { attach(target); return; }
                     if (result == null) { r.retryAt = System.currentTimeMillis() + 60000; retry(r, 60100); return; }
-                    r.translated = result; target.setText(result);
+                    r.translated = result; showTranslation(r, target);
                 });
             });
         } catch (RuntimeException full) { r.pending = false; r.retryAt = System.currentTimeMillis() + 15000; retry(r, 15100); }
@@ -161,13 +169,42 @@ public final class NativeText {
             if (view != null) attach(view);
         }, delay);
     }
-    private static final class TextRecord {
+    private static void showTranslation(TextRecord record, TextView view) {
+        CharSequence display = displayText(record.original.toString(), record.translated, Immersive.bilingual());
+        if (!display.equals(record.translated))
+            display = new SpannableStringBuilder(record.original).append('\n').append(record.translated);
+        show(record, view, display);
+    }
+    private static void show(TextRecord record, TextView view, CharSequence display) {
+        record.lastDisplay = display.toString();
+        if (view.getText().toString().equals(record.lastDisplay)) return;
+        record.writing = true;
+        try { view.setText(display); }
+        finally { record.writing = false; }
+    }
+    static String displayText(String original, String translated, boolean bilingual) {
+        return bilingual && !original.equals(translated) ? original + '\n' + translated : translated;
+    }
+    static String displayHtml(String original, String translated, boolean bilingual) {
+        return bilingual && !original.equals(translated)
+            ? "<div>" + original + "</div><div>" + translated + "</div>" : translated;
+    }
+    private static final class TextRecord implements TextWatcher {
         final WeakReference<TextView> view;
         CharSequence original;
-        String translated, language;
-        boolean enabled, pending;
+        String translated, lastDisplay, language;
+        boolean enabled, pending, writing;
         long generation, retryAt;
-        TextRecord(TextView value) { view = new WeakReference<>(value); original = value.getText(); }
+        TextRecord(TextView value) {
+            view = new WeakReference<>(value);
+            original = TextUtils.stringOrSpannedString(value.getText());
+        }
+        @Override public void beforeTextChanged(CharSequence text, int start, int count, int after) {}
+        @Override public void onTextChanged(CharSequence text, int start, int before, int count) {}
+        @Override public void afterTextChanged(Editable text) {
+            TextView target = view.get();
+            if (!writing && target != null) attach(target);
+        }
     }
     private static boolean english(String text) {
         return text.length() >= 3 && text.length() <= 24000 && text.matches("(?s).*[A-Za-z].*") &&
@@ -178,7 +215,7 @@ public final class NativeText {
         String text = plain.trim();
         Bundle extras = new Bundle();
         extras.putString("text", text); extras.putString("target", language);
-        Bundle answer = resolver.call(Uri.parse("content://cn.local.repochinese.translation"), "translate", null, extras);
+        Bundle answer = LocalTranslation.call(appContext, "translate", extras);
         String translated = answer == null ? null : answer.getString("text");
         if (answer == null || answer.getString("error") != null || translated == null || translated.trim().isEmpty())
             throw new IOException("translation unavailable");

@@ -158,7 +158,7 @@ public final class SearchActivity extends Activity {
                         if (source.equals("auto")) {
                             Bundle identification = new Bundle();
                             identification.putString("text", translationText);
-                            Bundle identified = getContentResolver().call(Uri.parse("content://cn.local.repochinese.translation"), "identify", null, identification);
+                            Bundle identified = LocalTranslation.call(this, "identify", identification);
                             if (identified == null || !LanguageOptions.supports(identified.getString("language"))) throw new IOException("无法识别来源语言");
                             source = identified.getString("language");
                         }
@@ -166,12 +166,12 @@ public final class SearchActivity extends Activity {
                         request.putString("source", source);
                         request.putString("target", target);
                         request.putString("text", translationText);
-                        Bundle answer = getContentResolver().call(Uri.parse("content://cn.local.repochinese.translation"), "translate", null, request);
+                        Bundle answer = LocalTranslation.call(this, "translate", request);
                         if (answer == null || answer.getString("text") == null) throw new IOException("翻译模型暂不可用");
                         translated = SearchQuery.translatedKeywords(entered, answer.getString("text"));
                         languagePair = LanguageOptions.name(source) + " → " + LanguageOptions.name(target);
                     } catch (Exception unavailable) {
-                        translationProblem = " 互译暂不可用，已搜索原关键词；可手动选择来源语言，并在仓库中文助手中检查离线模型。";
+                        translationProblem = " 内置互译暂不可用，已搜索原关键词；首次使用请保持可访问模型服务的 Wi-Fi，或手动选择来源语言重试。";
                     }
                 }
                 List<String> queries = new ArrayList<>();

@@ -5,4 +5,8 @@
     <application android:label="GitHub 中文增强临时验证" android:debuggable="true" android:allowBackup="false" android:hasCode="true" />
     <instrumentation android:name="cn.local.githubcn.check.ImmersiveCheck"
         android:targetPackage="com.github.android.chinese" android:functionalTest="true" />
+    <instrumentation android:name="cn.local.githubcn.check.EmbeddedEngineCheck"
+        android:targetPackage="com.github.android.chinese" android:functionalTest="true" />
+    <instrumentation android:name="cn.local.githubcn.check.RealRendererCheck"
+        android:targetPackage="com.github.android.chinese" android:functionalTest="true" />
 </manifest>

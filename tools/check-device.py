@@ -80,7 +80,7 @@ def build_checks(tools, work, args):
     return output, fingerprint
 
 
-def run_checks(tools, apk, fingerprint, work):
+def run_checks(tools, apk, fingerprint, work, runner=RUNNER):
     installed, metadata = installed_certificate(tools, CLONE_PACKAGE, work)
     if installed is None:
         raise ValueError("The enhanced clone must already be installed; this tool installs only the temporary tests")
@@ -90,7 +90,7 @@ def run_checks(tools, apk, fingerprint, work):
     try:
         run(tools["adb"] + ["install", "-r", apk])
         installed_test = True
-        command = tools["adb"] + ["shell", "am", "instrument", "-w", "-r", RUNNER]
+        command = tools["adb"] + ["shell", "am", "instrument", "-w", "-r", runner]
         # The runner has a 180s deadline; allow a short ADB startup/teardown margin.
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", timeout=190)
         (work / "instrumentation-result.txt").write_text(result.stdout, encoding="utf-8")
@@ -118,6 +118,8 @@ def main():
     parser.add_argument("--adb", help="ADB executable, needed only with --run")
     parser.add_argument("--serial", help="ADB device serial, needed only with --run")
     parser.add_argument("--run", action="store_true", help="Verify clone signer, install/run tests, then uninstall only cn.local.githubcn.check")
+    parser.add_argument("--runner", choices=("ImmersiveCheck", "EmbeddedEngineCheck", "RealRendererCheck"),
+                        default="ImmersiveCheck", help="Select the local check; default is the full feature suite")
     args = parser.parse_args()
     work = None
     try:
@@ -136,7 +138,7 @@ def main():
         print("Private test work directory: " + str(work))
         apk, fingerprint = build_checks(tools, work, args)
         if args.run:
-            run_checks(tools, apk, fingerprint, work)
+            run_checks(tools, apk, fingerprint, work, TEST_PACKAGE + "/" + TEST_PACKAGE + "." + args.runner)
         report = {"apk": str(apk), "certificate_sha256": fingerprint, "device_checks_passed": bool(args.run), "device_accessed": bool(args.run)}
         (work / "check-result.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(json.dumps(report, indent=2))

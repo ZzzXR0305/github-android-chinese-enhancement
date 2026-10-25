@@ -12,17 +12,18 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "ZzzXR0305/github-android-chinese-enhancement"
-TAG = "v1.279.0-cn2"
+TAG = "v1.279.0-cn4"
 FORBIDDEN = {".apk", ".apks", ".aab", ".dex", ".class", ".jar", ".zip", ".keystore", ".jks", ".p12", ".pem", ".key", ".smali", ".idsig"}
-NOTES = """正文原位翻译、仓库名称增强搜索，以及可拖动的“译 / 搜”按钮。
-长按隐藏后，在同一页面继续停留 5 秒会自动恢复。
-59 种语言选项和多语言互译搜索；原版搜索默认保留原入口，菜单可选择接入增强搜索。
+NOTES = """cn4 将正文先在脱离页面的 DOM 中完成整页翻译，再一次显示，减少逐段闪烁和原文回跳。
+新增可持久化的“双语显示”开关：原文在上、译文在下；关闭后恢复纯译文，不重新发起翻译。
+后台模型预热、进程内成功翻译缓存和页缓存可降低同页重载及新 WebView 的等待。
+ML Kit 引擎已内置到增强应用 UID 中，不再依赖独立助手或无障碍服务。
 
-当前适配 GitHub Android 1.279.0 / versionCode 950，增强补丁 cn2。
+当前适配 GitHub Android 1.279.0 / versionCode 950，增强补丁 cn4。
 官方原版继续从商店更新；未知新版必须先增加并验证适配 profile。
-README 和 tools/updates/README.md 包含本地构建及稳定签名覆盖更新流程。
+`final-cn4-5` 已通过两套 Android Instrumentation，以及公开发行详情页的中文、双语切换和往返滚动验收；具体边界和测量见 README。
 
-发行内容是自有开源代码。官方 GitHub APK、反编译源码、翻译模型、账号数据及签名私钥未发布。
+发行内容仅为自有开源代码。官方 GitHub APK、反编译源码、翻译模型、账号数据、真机截图及签名私钥均未发布。
 """
 
 
@@ -97,7 +98,7 @@ def main():
             notes = Path(temporary) / "notes.md"
             notes.write_text(NOTES, encoding="utf-8")
             command([gh, "release", "create", TAG, "--repo", REPOSITORY, "--target", "main",
-                     "--title", "GitHub 中文增强 1.279.0-cn2", "--notes-file", notes])
+                     "--title", "GitHub 中文增强 1.279.0-cn4", "--notes-file", notes])
     remote_head = command([gh, "api", "repos/" + REPOSITORY + "/git/ref/heads/main", "--jq", ".object.sha"]).stdout.strip()
     local_head = command(["git", "rev-parse", "HEAD"]).stdout.strip()
     if remote_head != local_head:

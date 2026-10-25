@@ -22,11 +22,19 @@ def fixture(root, profile):
       </application></manifest>''', encoding="utf-8")
     auth = root / "res/xml/authenticator.xml"; auth.parent.mkdir(parents=True)
     auth.write_text('<account-authenticator xmlns:android="http://schemas.android.com/apk/res/android" android:accountType="com.github.android"/>', encoding="utf-8")
-    classes = {}
+    classes, methods = {}, {}
     for hook in profile["hooks"]:
         anchor = hook.get("anchor", "invoke-virtual/range {v0 .. v5}, Landroid/webkit/WebView;->loadDataWithBaseURL(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V")
-        body = "\n".join(hook.get("requires", [])) + "\n" + anchor
-        classes[hook["class"]] = ".super " + hook.get("extends", "Ljava/lang/Object;") + "\n.method public final " + hook["method"] + "\n" + body + "\n.end method\n"
+        if hook["id"] in ("web_before_load", "legacy_before_load"):
+            anchor = "move-result-object v0\n\n    invoke-virtual {p0, v0}, Landroid/webkit/WebView;->loadUrl(Ljava/lang/String;)V"
+        if hook["id"] in ("web_after_load", "legacy_after_load"):
+            anchor += "\n\n    invoke-virtual {p0, v0, v1}, Landroid/webkit/WebView;->evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V"
+        body = "\n".join(feature for feature in hook.get("requires", []) if feature not in anchor) + "\n" + anchor
+        classes.setdefault(hook["class"], ".super " + hook.get("extends", "Ljava/lang/Object;") + "\n")
+        key = (hook["class"], hook["method"])
+        methods[key] = methods.get(key, "") + body + "\n"
+    for (descriptor, method), body in methods.items():
+        classes[descriptor] += ".method public final " + method + "\n" + body + "\n.end method\n"
     classes.update({
         "Lekk;": ".super Ljava/lang/Object;\n.method public final z()Lh6x;\n.end method\n.method public final j(Lqgv;)Ljava/lang/Object;\n.end method\n",
         "Lg52;": ".super Ljava/lang/Object;\n.field public static final b:Lu060;\n",
@@ -49,7 +57,9 @@ def main():
         before = fingerprint(root)
         plan = make_plan(root, profile)
         assert fingerprint(root) == before
-        assert len(plan["report"]["hooks"]) == 7
+        assert len(plan["report"]["hooks"]) == len(profile["hooks"]) == 11
+        assert {"web_before_load", "legacy_before_load", "web_after_load", "legacy_after_load"}.issubset({hook["id"] for hook in plan["report"]["hooks"]})
+        assert plan["report"]["relocated_classes"] == 7
         output = apply_plan(plan, parent / "patched")
         assert fingerprint(root) == before
         manifest = ET.parse(output / "AndroidManifest.xml").getroot()
@@ -57,6 +67,19 @@ def main():
         assert manifest.find("./application/activity[@" + ANDROID + "name='cn.local.githubcn.UpdateActivity']") is not None
         assert manifest.find("./application/activity[@" + ANDROID + "name='cn.local.githubcn.SearchActivity']").get(ANDROID + "exported") == "false"
         assert "versionName: 1.279.0-cn2" in (output / "apktool.yml").read_text()
+        for name in ("f", "LegacyGitHubWebView"):
+            hooked = next(output.glob("smali*/com/github/android/webview/viewholders/" + name + ".smali")).read_text()
+            assert "->attach(Landroid/webkit/WebView;)V" in hooked and "->beforeLoad(" in hooked
+            before = hooked.index("->beforeLoad(")
+            assert before < hooked.index("Landroid/webkit/WebView;->loadUrl", before)
+            after_call = "invoke-static {p0, v0}, Lcn/local/githubcn/Immersive;->afterLoad(Landroid/webkit/WebView;Ljava/lang/String;)Ljava/lang/String;"
+            assert hooked.count(after_call) == 1
+            after = hooked.index(after_call)
+            initialize = "invoke-direct {v1}, Ljava/lang/Object;-><init>()V"
+            start = hooked.rfind(initialize, 0, after)
+            evaluate = hooked.index("invoke-virtual {p0, v0, v1}, Landroid/webkit/WebView;->evaluateJavascript", after)
+            assert hooked.index("Landroid/webkit/WebView;->loadUrl", before) < start < after < evaluate
+            assert [line.strip() for line in hooked[start:evaluate].splitlines() if line.strip()] == [initialize, after_call, "move-result-object v0"]
         victim = next(root.glob("smali*/xrz.smali"))
         victim.write_text(victim.read_text().replace("const v2, 0x19c39b2c", "const v2, 0x0"), encoding="utf-8")
         broken = fingerprint(root)

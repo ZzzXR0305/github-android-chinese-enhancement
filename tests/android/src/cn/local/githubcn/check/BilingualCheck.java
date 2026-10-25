@@ -2,8 +2,9 @@ package cn.local.githubcn.check;
 
 import android.app.Instrumentation;
 import android.content.Context;
-import android.net.Uri;
 import android.os.Bundle;
+import android.os.Looper;
+import android.os.Process;
 import android.os.SystemClock;
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -14,7 +15,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONObject;
 
-/** Uses synthetic search terms, local signed translation service, and unauthenticated public repository search. */
+/** Uses synthetic search terms, the embedded translation engine, and unauthenticated public repository search. */
 public final class BilingualCheck {
     public static Bundle run(Instrumentation runner, Context target, long deadline) {
         Bundle evidence = new Bundle();
@@ -23,14 +24,14 @@ public final class BilingualCheck {
             Class<?> query = Class.forName("cn.local.githubcn.SearchQuery", true, target.getClassLoader());
             Class<?> languages = Class.forName("cn.local.githubcn.LanguageOptions", true, target.getClassLoader());
             String[] codes = (String[]) languages.getField("CODES").get(null);
-            Bundle supported = provider(target, "languages", null, deadline);
+            Bundle supported = local(target, "languages", null, deadline);
             require(codes.length == 59 && supported != null && supported.getStringArrayList("languages") != null, "The supported language catalog is missing");
             require(new HashSet<>(Arrays.asList(codes)).equals(new HashSet<>(supported.getStringArrayList("languages"))), "Native language choices differ from the installed ML Kit SDK");
             for (String code : codes) {
                 require((Boolean) languages.getMethod("supports", String.class).invoke(null, code), "Native catalog rejects its own supported code: " + code);
                 Bundle noDownload = new Bundle();
                 noDownload.putString("text", "synthetic"); noDownload.putString("source", code); noDownload.putString("target", code);
-                Bundle accepted = provider(target, "translate", noDownload, deadline);
+                Bundle accepted = local(target, "translate", noDownload, deadline);
                 require(accepted != null && "synthetic".equals(accepted.getString("text")), "Supported source/target rejected: " + code);
             }
             String[][] identification = {
@@ -40,7 +41,7 @@ public final class BilingualCheck {
             };
             for (String[] sample : identification) {
                 Bundle request = new Bundle(); request.putString("text", sample[1]);
-                Bundle identified = provider(target, "identify", request, deadline);
+                Bundle identified = local(target, "identify", request, deadline);
                 require(identified != null && sample[0].equals(identified.getString("language")), "Local language identifier failed for " + sample[0] + ": " + identified);
                 evidence.putString("multilingual_identified_" + sample[0], identified.getString("language"));
             }
@@ -124,12 +125,20 @@ public final class BilingualCheck {
     private static String translate(Context context, String text, String source, String target, long deadline) throws Exception {
         Bundle extras = new Bundle();
         extras.putString("text", text); extras.putString("source", source); extras.putString("target", target);
-        Bundle reply = provider(context, "translate", extras, deadline);
-        require(reply != null && reply.getString("text") != null, "Signed translation provider failed: " + (reply == null ? "empty reply" : reply.getString("error")));
+        Bundle reply = local(context, "translate", extras, deadline);
+        require(reply != null && reply.getString("text") != null, "Embedded translation failed: " + (reply == null ? "empty reply" : reply.getString("error")));
         return reply.getString("text");
     }
-    private static Bundle provider(Context context, String method, Bundle extras, long deadline) throws Exception {
-        FutureTask<Bundle> task = new FutureTask<>(() -> context.getContentResolver().call(Uri.parse("content://cn.local.repochinese.translation"), method, null, extras));
+    private static Bundle local(Context context, String method, Bundle extras, long deadline) throws Exception {
+        Method entry = Class.forName("cn.local.githubcn.LocalTranslation", true, context.getClassLoader())
+            .getMethod("call", Context.class, String.class, Bundle.class);
+        FutureTask<Bundle> task = new FutureTask<>(() -> {
+            require(Process.myUid() == context.getApplicationInfo().uid, "Embedded call is outside the clone UID");
+            require(Looper.myLooper() != Looper.getMainLooper(), "Embedded call ran on the main thread");
+            Bundle answer = (Bundle) entry.invoke(null, context, method, extras);
+            require(answer != null && answer.getString("error") == null, "Embedded " + method + " failed: " + (answer == null ? "empty reply" : answer.getString("error")));
+            return answer;
+        });
         new Thread(task, "githubcn-bilingual-model-check").start();
         return task.get(Math.max(1, deadline - SystemClock.elapsedRealtime()), TimeUnit.MILLISECONDS);
     }

@@ -93,7 +93,7 @@ def make_plan(root, profile, patch_version="cn2"):
     for hook in profile["hooks"]:
         try:
             path, text = locate(hook["class"])
-            if "Lcn/local/githubcn/" in text:
+            if "Lcn/local/githubcn/" in cache[path]:
                 raise ValueError("existing payload calls detected; use a fresh official decode")
             if hook.get("extends") and not extends(hook["class"], hook["extends"]):
                 raise ValueError("class inheritance does not reach " + hook["extends"])
@@ -159,12 +159,9 @@ def make_plan(root, profile, patch_version="cn2"):
             errors.append("Required manifest identity missing: " + old_value)
     document.set("package", clone)
     application.set(ANDROID + "label", "GitHub 中文增强")
-    permission = ET.SubElement(document, "uses-permission")
-    permission.set(ANDROID + "name", "cn.local.repochinese.TRANSLATE")
     queries = document.find("queries")
     if queries is None:
         queries = ET.SubElement(document, "queries")
-    ET.SubElement(queries, "package").set(ANDROID + "name", "cn.local.repochinese")
     ET.SubElement(queries, "package").set(ANDROID + "name", original)
     activity = ET.SubElement(application, "activity")
     activity.set(ANDROID + "name", "cn.local.githubcn.SearchActivity")

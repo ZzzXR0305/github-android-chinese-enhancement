@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <application android:label="内置翻译引擎容器" android:allowBackup="false">
+        <!-- Build container only: never install it or merge its manifest into the host. -->
+        <activity tools:node="removeAll" />
+        <service tools:node="removeAll" />
+        <provider tools:node="removeAll" />
+        <receiver tools:node="removeAll" />
+    </application>
+</manifest>
